@@ -6,6 +6,10 @@
 ![Platform](https://img.shields.io/badge/Platform-Microsoft_Defender_for_Endpoint-blue)
 ![Category](https://img.shields.io/badge/Category-Threat_Hunting-red)
 
++ Analyst: Ernest Dicks
++ Platform: Microsoft Defender for Endpoint (MDE)
++ Tools: Advacned Hunting KQL, Microsoft Defender Tables, MITRE Microsoft Defender for Endpoint (MDE), Windows Events Logs
+
 ---
 
 ### 1. Scenario Overview
@@ -34,9 +38,6 @@ On **2025-11-19**, an attacker accessed **`AZUKI-SL`** via exposed RDP using the
 - Exfiltrated data over **HTTPS via Discord**  
 - Attempted **anti-forensics** by clearing Windows event logs with `wevtutil`  
 
-**Impact:** High  
-**Status:** Fully investigated (lab simulation)  
-
 ---
 
 ### 3. How I Solved Each Flag (Walkthrough + KQL)
@@ -46,8 +47,7 @@ On **2025-11-19**, an attacker accessed **`AZUKI-SL`** via exposed RDP using the
 ### 🚩 Flag 1 – Initial Access IP  
 Question: Question: Identify the source IP address of the Remote Desktop Protocol connection?
 
-**Answer**:** `88.97.178.12`  
-**MITRE:** T1133 – External Remote Services
+**Answer**: `88.97.178.12`  
 
 ```kql
 DeviceLogonEvents
@@ -67,9 +67,7 @@ Screenshot: <img width="1894" height="478" alt="image" src="https://github.com/u
 
 Question: Which account was used for the RDP compromise?
 
-**Answer**: kenji.sato
-
-**MITRE**: T1078 – Valid Accounts
+**Answer**: `kenji.sato`
 
 ```kql
 DeviceLogonEvents
@@ -79,7 +77,8 @@ DeviceLogonEvents
 | where RemoteIP == "88.97.178.12"
 | distinct AccountName
 ```
-Explanation: 
+## Step-by-step explanation:
+
 Tightned the RDP query to only that suspicious IP and extracted the account involved. The result was kenji.sato.
 
 Screenshot: <img width="1903" height="850" alt="image" src="https://github.com/user-attachments/assets/bec88398-6904-4aa4-8114-0c204480b6c6" />
@@ -91,10 +90,7 @@ Screenshot: <img width="1903" height="850" alt="image" src="https://github.com/u
 
 Question: What discovery command did the attacker use?
 
-**Answer**: arp -a
-
-**MITRE**: T1018 – Remote System Discovery
-
+**Answer**: `arp -a`
 
 ```KQL
 DeviceProcessEvents
@@ -103,7 +99,8 @@ DeviceProcessEvents
 | where ProcessCommandLine has "arp"
 ```
 
-Explanation:
+## Step-by-step explanation:
+
 Looked at process command lines for ARP usuage. The attacker ran arp -a enumerate local network neighbors.
 
 Screenshot: <img width="1897" height="433" alt="image" src="https://github.com/user-attachments/assets/dd5ee7ab-bf93-4d74-b6c3-4f4b81dff662" />
@@ -116,16 +113,25 @@ Screenshot: <img width="1897" height="433" alt="image" src="https://github.com/u
 
 Question: Which hidden directory was used for staging?
 
-**Answer***: C:\ProgramData\WindowsCache
-
-**MITRE**: T1096 – Hidden Files and Directories
+**Answer***: `C:\ProgramData\WindowsCache`
 
 ```KQL 
+let StartTime = todatetime('2025-11-19T00:00:00Z');
+let EndTime = todatetime('2025-11-22T23:59:59Z');
 DeviceProcessEvents
-| where DeviceName == "AZUKI-SL"
-| where FileName == "attrib.exe"
-| where ProcessCommandLine has "+h"
- and ProcessCommandLine has "+s"
+| where Timestamp between (StartTime .. EndTime)
+| where FileName =~ "attrib.exe"
+    or (FileName =~ "cmd.exe" and ProcessCommandLine has "attrib")
+    or (FileName =~ "powershell.exe" and ProcessCommandLine has "attrib")
+| where ProcessCommandLine has_any ("+h", "+s")
+| project DeviceId,
+          AttribTime = Timestamp,
+          AttribCmd = ProcessCommandLine,
+          AttribProc = FileName,
+          InitiatingProcessAccountName,
+          InitiatingProcessFileName,
+          InitiatingProcessCommandLine
+| order by AttribTime desc
 ```
 
 ## Step-by-step explanation:
@@ -140,25 +146,31 @@ The command-line parameters revealed the path being hidden as C:\ProgramData\Win
 
 
 
-Screenshot:
+Screenshot: <img width="1907" height="531" alt="image" src="https://github.com/user-attachments/assets/8509a3b9-d99e-4b51-aba0-d49c509fd05a" />
+
 ---
 
 ### 🚩 Flag 5 – Defender Extension Exclusions
 
 Question: How many new file extensions were excluded in Defender?
 
-**Answer**: 3 extensions
+**Answer**: `3 extensions`
 
-**MITRE**: T1562.001 – Impair Defenses (Disable Security Tools)
 
-<strong>KQL – Registry Changes to Defender Extension Exclusions</strong>
 ```kql
+let StartTime = todatetime('2025-11-19T00:00:00Z');
+let EndTime = todatetime('2025-11-22T23:59:59Z');
+
 DeviceRegistryEvents
-| where DeviceName == "AZUKI-SL"
-| where RegistryKey contains @"Microsoft\Windows Defender\Exclusions\Extensions"
+| where Timestamp between (StartTime .. EndTime)
+| where RegistryKey has @"Software\Microsoft\Windows Defender\Exclusions"
+| where ActionType =~ "RegistryValueSet"
+| where RegistryValueName in (".bat", ".ps1", ".exe")
+| distinct RegistryValueName
+
 ```
 
-Step-by-step explanation:
+## Step-by-step explanation:
 
 DeviceRegistryEvents – I moved to registry telemetry to see configuration tampering.
 
@@ -168,23 +180,31 @@ Investigating the RegistryValueData for these events showed three malicious file
 
 
 
-Screenshot:
+Screenshot: <img width="1885" height="330" alt="image" src="https://github.com/user-attachments/assets/23031054-2168-41c8-a646-adf58672e9e9" />
+
 ---
 
 ### 🚩 Flag 6 – Defender Path Exclusion
 
 Question: Which path was excluded from Defender scanning?
 
-**Answer**: C:\Users\KENJI~1.SAT\AppData\Local\Temp
+**Answer**: `C:\Users\KENJI~1.SAT\AppData\Local\Temp`
 
 <strong>KQL – Registry Changes to Defender Path Exclusions</strong>
 ```kql
+let StartTime = datetime(2025-11-19T00:00:00Z);
+let EndTime   = datetime(2025-11-22T23:59:59Z);
+
 DeviceRegistryEvents
-| where DeviceName == "AZUKI-SL"
-| where RegistryKey contains @"Microsoft\Windows Defender\Exclusions\Paths"
+| where Timestamp between (StartTime .. EndTime)
+| where RegistryKey has @"SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths"
+| where ActionType =~ "RegistryValueSet"
+| distinct Timestamp, RegistryValueName
+| order by Timestamp asc
+
 ```
 
-Step-by-step explanation:
+## Step-by-step explanation:
 
 Same approach as Flag 5, but pointed at the Paths exclusion key instead of Extensions.
 
@@ -196,18 +216,16 @@ Excluding this Temp path allows malware dropped there to bypass Defender inspect
 
 
 
-Screenshot:
+Screenshot: <img width="1888" height="415" alt="image" src="https://github.com/user-attachments/assets/54c0b5a1-1756-4162-9800-ebd36dfb69ff" />
+
 ---
 
 ### 🚩 Flag 7 – Living-off-the-Land Downloader
 
 Question: Which LoLBin was abused to download content?
 
-**Answer**: certutil.exe
+**Answer**: `certutil.exe`
 
-**MITRE**: T1218 – Signed Binary Proxy Execution
-
-<strong>KQL – Find certutil Downloader Activity</strong>
 ```kql
 DeviceProcessEvents
 | where DeviceName == "AZUKI-SL"
@@ -215,7 +233,7 @@ DeviceProcessEvents
 | where ProcessCommandLine has_any ("http:", "https:")
 ```
 
-Step-by-step explanation:
+## Step-by-step explanation:
 
 Targeted known LoLBins often used for downloading (e.g., certutil).
 
@@ -226,24 +244,28 @@ ProcessCommandLine has_any ("http:", "https:") – Look for usage where URLs are
 The results showed certutil being used with an HTTP/HTTPS URL, indicating a download of remote payloads.
 
 
-Screenshot:
+Screenshot: <img width="1903" height="451" alt="image" src="https://github.com/user-attachments/assets/2a09bdc9-0768-4e3d-bd58-4cb11323d880" />
+
 ---
 
 ### 🚩 Flag 8 – Scheduled Task Name (Persistence)
 
 Question: What is the name of the persistence scheduled task?
-**Answer**: Windows Update Check
-**MITRE**: T1053.005 – Scheduled Task
+**Answer**: `Windows Update Check`
 
-<strong>KQL – Identify Malicious Scheduled Task Creation</strong>
 ```kql
+let StartTime = todatetime('2025-11-19T00:00:00Z');
+let EndTime = todatetime('2025-11-22T23:59:59Z');
 DeviceProcessEvents
-| where DeviceName == "AZUKI-SL"
-| where FileName == "schtasks.exe"
+| where Timestamp between (StartTime .. EndTime)
+| where FileName =~ "schtasks.exe"
 | where ProcessCommandLine has "/create"
+| extend TaskName = extract(@"(?i)/tn\s+\""?([^\""]+)\""?", 1, ProcessCommandLine)
+| project Timestamp, DeviceName, TaskName, ProcessCommandLine
+| order by Timestamp asc
 ```
 
-Step-by-step explanation:
+## Step-by-step explanation:
 
 FileName == "schtasks.exe" – Look for command-line creation of scheduled tasks.
 
@@ -254,23 +276,29 @@ schtasks /create /tn "Windows Update Check" ...
 
 The /tn parameter revealed the scheduled task name: Windows Update Check.
 
-Screenshot:
+Screenshot: <img width="1914" height="454" alt="image" src="https://github.com/user-attachments/assets/90f095b1-dd88-4821-95f3-74150fe20d01" />
+
 ---
 ### 🚩 Flag 9 – Scheduled Task Payload Path
 
 Question: What binary is executed by the scheduled task?
-**Answer**: C:\ProgramData\WindowsCache\svchost.exe
+**Answer**: `C:\ProgramData\WindowsCache\svchost.exe`
 
-<strong>KQL – Extract Payload from Scheduled Task Command</strong>
+
 ```kql
+let StartTime = todatetime('2025-11-19T00:00:00Z');
+let EndTime = todatetime('2025-11-22T23:59:59Z');
 DeviceProcessEvents
-| where DeviceName == "AZUKI-SL"
-| where FileName == "schtasks.exe"
+| where Timestamp between (StartTime .. EndTime)
+| where FileName =~ "schtasks.exe"
 | where ProcessCommandLine has "/create"
-| project Timestamp, ProcessCommandLine
+| extend TaskName = extract(@"(?i)/tn\s+\""?([^\""]+)\""?", 1, ProcessCommandLine)
+| project Timestamp, DeviceName, TaskName, ProcessCommandLine
+| order by Timestamp asc
+
 ```
 
-Step-by-step explanation:
+## Step-by-step explanation:
 
 Reused the Flag 8 query and added project to focus on the full command line.
 
@@ -284,18 +312,32 @@ This confirmed the malicious payload associated with the scheduled persistence.
 
 ### 🚩 Flag 10 – Command & Control (C2) IP
 
-Question: What IP did the malware use as C2?
-**Answer**: 78.141.196.6
+Question: Identify the IP address of the command and control server?
+**Answer**: `78.141.196.6`
 
-><strong>KQL – Find Suspicious Network Connections from Malicious svchost</strong>
 ```kql
+// Find outbound connections from the malicious executable
+let StartTime = todatetime('2025-11-19T00:00:00Z');
+
+let EndTime = todatetime('2025-11-22T23:59:59Z');
+
 DeviceNetworkEvents
-| where DeviceName == "AZUKI-SL"
-| where InitiatingProcessFileName == "svchost.exe"
-| summarize by RemoteIP, RemotePort
+| where Timestamp between (StartTime .. EndTime)
+  | where ActionType == "ConnectionSuccess"
+| where DeviceName contains "azuki-sl"
+| where RemotePort in (443, 80)
+| where InitiatingProcessFileName in~ ("svchost.exe", "wupdate.ps1", "powershell.exe")
+| where RemoteIP != "" and RemoteIP !startswith "10."
+| summarize EventCount = count(),
+            FirstSeen = min(Timestamp),
+            LastSeen  = max(Timestamp)
+  by RemoteIP
+| order by EventCount desc
+| take 90
+
 ```
 
-Step-by-step explanation:
+## Step-by-step explanation:
 
 DeviceNetworkEvents – Switched to network telemetry tied to processes.
 
@@ -304,124 +346,175 @@ InitiatingProcessFileName == "svchost.exe" – Focus on svchost, which was our m
 summarize by RemoteIP, RemotePort – List out all remote IP/port pairs that this process contacted.
 
 Among normal system traffic, a suspicious external IP stood out: 78.141.196.6 on an HTTPS port, flagged as the C2.
+
+Screenshot: <img width="1866" height="844" alt="image" src="https://github.com/user-attachments/assets/835c6440-2707-4de8-8904-8e638b4e0682" />
+
 ---
 
 ### 🚩 Flag 11 – Credential Dump Tool
 
-Question: What binary was used to dump credentials?
-**Answer**: Mm.exe
-**MITRE**: T1003.001 – OS Credential Dumping (LSASS)
+Question: Identify the destination port used for command and control communications?
+**Answer**: `443`
 
-<strong>KQL – Find Suspicious EXE in Staging Paths</strong>
 ```kql
-DeviceFileEvents
-| where DeviceName == "AZUKI-SL"
-| where FileName == "Mm.exe"
+let StartTime = todatetime('2025-11-19T00:00:00Z');
+
+let EndTime = todatetime('2025-11-22T23:59:59Z');
+
+DeviceNetworkEvents
+| where Timestamp between (StartTime .. EndTime)
+| where DeviceName contains "azuki"
+| where InitiatingProcessFileName =~ "svchost.exe"
+    or InitiatingProcessFileName =~ "wupdate.ps1"
+    or InitiatingProcessFileName =~ "powershell.exe"
+| where RemoteIP != "" and RemoteIP !startswith "10."
+| project Timestamp,
+          DeviceName,
+          InitiatingProcessFileName,
+          InitiatingProcessCommandLine,
+          RemoteIP,
+          RemotePort,
+          Protocol
+| order by Timestamp asc
+
 ```
 
-Step-by-step explanation:
+## Step-by-step explanation:
 
 I searched file creation and modification events using DeviceFileEvents.
 
 Narrowed the search to the suspicious file name Mm.exe, as indicated in the hunt.
 
 Results showed this binary placed in staging locations used by the attacker, consistent with a credential dump utility.
+
+Screenshot:  <img width="1870" height="805" alt="image" src="https://github.com/user-attachments/assets/cf35d15a-1031-48b5-860d-7b480c336198" />
+
 ---
 
 ### 🚩 Flag 12 – LSASS Dump Command
 
-Question: What LSASS-related command was executed?
-**Answer**: sekurlsa::logonpasswords
+Question: Identify the filename of the credential dumping tool?
+**Answer**: `mm.exe`
 
-<strong>KQL – Detect Mimikatz-like sekurlsa Usage</strong>
 ```kql
-DeviceProcessEvents
-| where DeviceName == "AZUKI-SL"
-| where ProcessCommandLine has "sekurlsa::logonpasswords"
+let StartTime = todatetime('2025-11-19T00:00:00Z');
+
+let EndTime = todatetime('2025-11-22T23:59:59Z');
+
+DeviceFileEvents
+| where Timestamp between (StartTime .. EndTime)
+| where FolderPath has_any ("ProgramData", "WindowsCache", "Temp")
+| where FileName matches regex @"^[a-zA-Z0-9]{1,3}\.exe$"
+| project Timestamp, FileName, FolderPath
+| order by Timestamp asc
+
+
 ```
+## Step-by-step explanation:
 
-Step-by-step explanation:
+I set a time range from November 19 to November 22, 2025 to focus only on activity related to the suspected intrusion window.
 
-Still in DeviceProcessEvents, I looked for classic Mimikatz command modules.
+Using the DeviceFileEvents table, I searched for file creation activity in known attacker staging directories, specifically ProgramData, WindowsCache, and Temp.
 
-ProcessCommandLine has "sekurlsa::logonpasswords" – This is a strong indicator of credential theft from LSASS.
+I then filtered for suspicious executable names made up of only 1–3 characters using a regex pattern, since attackers often use short, random file names to avoid detection
 
-The query returned the malicious process execution containing this command, tying it to the credential dump activity.
+The results returned multiple short-named executables dropped into these staging paths, which strongly indicates malicious tool staging associated with the attack chain.
+
+Screenshot: <img width="1897" height="526" alt="image" src="https://github.com/user-attachments/assets/f61563d4-dcd5-4d0c-80d2-0cfd8334863c" />
+
 ---
 
 ### 🚩 Flag 13 – Data Staging Archive
 
-Question: What file was used to stage data before exfiltration?
-**Answer**: exportdata.zip
-**MITRE**: T1560 – Archive Collected Data
+Question: Identify the module used to extract logon passwords from memory?
+**Answer**: `sekurlsa::logonpasswords`
 
-<strong>KQL – Find Suspicious ZIP Creation</strong></summary>
 ```kql
-DeviceFileEvents
-| where DeviceName == "AZUKI-SL"
-| where FileName endswith ".zip"
-| where FolderPath has_any ("ProgramData", "WindowsCache", "Temp")
+let StartTime = todatetime('2025-11-19T00:00:00Z');
+
+let EndTime = todatetime('2025-11-22T23:59:59Z');
+
+DeviceProcessEvents
+| where Timestamp between (StartTime .. EndTime)
+| where ProcessCommandLine has_any ("sekurlsa::", "logonpasswords")
+| project Timestamp,
+          DeviceName,
+          InitiatingProcessFileName,
+          InitiatingProcessCommandLine,
+          ProcessCommandLine
+| order by Timestamp asc
+
 ```
 
-Step-by-step explanation:
+## Step-by-step explanation:
 
-Filtered for .zip file creations to look for staging archives.
+I first set a focused time window from November 19 to November 22, 2025 so I was only looking at process activity during the suspected attack period.
 
-Limited folder paths to suspicious locations used earlier (ProgramData, WindowsCache, Temp).
+Using the DeviceProcessEvents table, I filtered on processes where the ProcessCommandLine contained either "sekurlsa::" or "logonpasswords", which are classic Mimikatz module names used for credential dumping from LSASS.
 
-Among the results, exportdata.zip (or variant export-data.zip) appeared in these staging directories, strongly tied to the exfil workflow.
+From there, I projected key fields like the timestamp, device name, initiating process, and full command lines to clearly see how and where the tool was executed.
+
+The results showed processes executing these Mimikatz commands, which directly ties this activity to credential theft behavior in the environment.
+
+Screenshot: <img width="1894" height="330" alt="image" src="https://github.com/user-attachments/assets/53c864a3-e650-4aa5-b114-1b71d50972b2" />
+
 ---
 
 ### 🚩 Flag 14 – Exfiltration Channel (Cloud Service)
 
-Question: Which cloud service was used to exfiltrate data?
-**Answer**: discord.com
-**MITRE**: T1567.002 – Exfiltration to Cloud Services
+Question: Identify the compressed archive filename used for data exfiltration?
+**Answer**: `export-data.zip`
 
-<strong>KQL – Identify Cloud Service Used for Exfiltration</strong>
 ```kql
-DeviceNetworkEvents
-| where DeviceName == "AZUKI-SL"
-| where RemoteUrl has "discord"
+let StartTime = todatetime('2025-11-19T00:00:00Z');
+
+let EndTime = todatetime('2025-11-22T23:59:59Z');
+DeviceFileEvents
+| where Timestamp between (StartTime .. EndTime)
+| where ActionType == "FileCreated"
+| where FileName endswith ".zip"
+| where FileName contains "export"
+| where FolderPath has_any ("ProgramData", "WindowsCache", "Temp")
+| project Timestamp, FileName, FolderPath
+| order by Timestamp asc
+
 ```
 
 
-Step-by-step explanation:
+## Step-by-step explanation:
 
-Returned to DeviceNetworkEvents to investigate outbound traffic around the time of data staging.
+I started by setting a time window from November 19 to November 22, 2025 to make sure I was only looking at file activity during the suspected attack period.
 
-RemoteUrl has "discord" – Filtered for connections to Discord domains.
+Using the DeviceFileEvents table, I filtered on events where the ActionType was "FileCreated", so I was only seeing newly created files, not reads or modifications.
 
-The presence of repeated HTTPS connections to discord.com aligned with the exfiltration timeline, confirming Discord as the exfil channel.
+From there, I narrowed it down to “.zip” files that contained the word “export” in the file name, since that pattern often lines up with data being packaged for exfiltration (for example, exported logs or user data).
+
+Finally, I restricted the results to files created in ProgramData, WindowsCache, or Temp, which are common attacker staging directories, and projected the timestamp, filename, and folder path to clearly see when and where these export archives were created as part of potential data staging for exfiltration.
+
 ---
 
 ### 🚩 Flag 15 – Log Tampering / Anti-Forensics
 
-Question: Which command was used to clear the Windows event logs?
-**Answer**: wevtutil cl Security
-MITRE: T1070.001 – Clear Windows Event Logs
+Question: Identify the cloud service used to exfiltrate stolen data?
+**Answer**: `discord`
 
-<strong>KQL – Detect wevtutil Log Clearing</strong>
 ```kql
-DeviceProcessEvents
-| where DeviceName == "AZUKI-SL"
-| where FileName == "wevtutil.exe"
-| where ProcessCommandLine has "cl"
+
 ```
 
 
-Step-by-step explanation:
+## Step-by-step explanation:
 
 FileName == "wevtutil.exe" – Focus on the native Windows log management tool.
 
 ProcessCommandLine has "cl" – cl stands for clear, commonly used to wipe logs.
 
 Inspecting the full ProcessCommandLine showed wevtutil cl Security, confirming that the attacker cleared the Security event log as part of anti-forensics.
+
 ---
 
 ### 🚩 Flag 16 – Anti-Forensics (Log Tampering)  
 ****Answer**:** `Security`  
-**MITRE:** T1070.001 – Clear Windows Event Logs
 
 ```kql
 DeviceProcessEvents
@@ -432,48 +525,140 @@ DeviceProcessEvents
 | order by Timestamp desc
 ```
 
-Explanation:
-Filtered for executions of wevtutil.exe with the cl (clear-log) argument within the investigation window. The command wevtutil cl Security confirmed the attacker cleared the Security event log to destroy forensic evidence.
+## Step-by-step explanation:
+
+I started by narrowing the time range to November 19–22, 2025 so I was only looking at process activity during the suspected attack window.
+
+Using the DeviceProcessEvents table, I filtered specifically for the process wevtutil.exe, which is a Windows built-in utility used to manage event logs.
+
+From there, I looked for commands where the ProcessCommandLine contained "cl", which is commonly used with wevtutil to clear event logs.
+
+Finally, I projected the timestamp, device name, and full process command line, and sorted the results in descending order so I could quickly see the most recent attempts to clear or tamper with event logs, which lines up with defense evasion behavior.
+
+Screenshot: <img width="1902" height="686" alt="image" src="https://github.com/user-attachments/assets/94bea4a6-f64c-45d2-a576-3fad0158b16b" />
+
+---
+### 🚩 Flag 17 – Anti-Forensics (Log Tampering)  
+Question: Identify the backdoor account username created by the attacker?
+**Answer**:** `Support`  
+
+
+```kql
+DeviceProcessEvents
+| where Timestamp between (datetime(2025-11-19T00:00:00Z) .. datetime(2025-11-22T23:59:59Z))
+| where FileName == "wevtutil.exe"
+| where ProcessCommandLine has "cl"
+| project Timestamp, DeviceName, ProcessCommandLine
+| order by Timestamp desc
+```
+
+## Step-by-step explanation:
+I used the DeviceProcessEvents table and kept the same StartTime and EndTime window to stay within the confirmed attack timeframe.
+
+I filtered for process command lines that contained /add, since that switch is commonly used when adding new user accounts.
+
+I then added another filter for the word administrators to specifically isolate commands that were attempting to add a user to the local Administrators group.
+
+Using the extract function, I pulled out the exact username that was added to the Administrators group directly from the command line for easier review.
+
+Finally, I projected the timestamp, full command line, and extracted admin username, and ordered the results by time to clearly show when each privilege escalation attempt occurred.
+
+Screenshot: <img width="1884" height="362" alt="image" src="https://github.com/user-attachments/assets/f9227c0e-478f-4073-8e0a-9cc7000ce132" />
+
+---
+---
+### 🚩 Flag 18  EXECUTION ( Malicious Script )
+Question:  Identify the PowerShell script file used to automate the attack chain?
+**Answer**:** `wupdate.ps1`  
+
+
+```kql
+DeviceProcessEvents
+| where Timestamp between (datetime(2025-11-19T00:00:00Z) .. datetime(2025-11-22T23:59:59Z))
+| where FileName == "wevtutil.exe"
+| where ProcessCommandLine has "cl"
+| project Timestamp, DeviceName, ProcessCommandLine
+| order by Timestamp desc
+```
+
+## Step-by-step explanation:
+I focused on DeviceProcessEvents within the confirmed attack window using the same StartTime and EndTime.
+
+From there, I filtered for powershell.exe processes that were using Invoke-WebRequest/iwr with an OutFile parameter and a URL, which is a common pattern for downloading malicious scripts.
+
+I then used extract on the ProcessCommandLine to pull out the actual .ps1 file name being written to disk via -OutFile.
+
+The results showed PowerShell downloading and saving a script named wpudate.ps1, which I identified as the PowerShell script used to automate the attack chain.
+
+Screenshot: <img width="1894" height="337" alt="image" src="https://github.com/user-attachments/assets/33dd2810-84ff-4940-935b-e8023789fce2" />
+
+---
+
+---
+### 🚩 Flag 19 - LATERAL MOVEMENT - (Secondary Target)
+Question: What IP address was targeted for lateral movement?
+**Answer**:** `10.1.0.188`  
+
+
+```kql
+DeviceProcessEvents
+| where Timestamp between (datetime(2025-11-19T00:00:00Z) .. datetime(2025-11-22T23:59:59Z))
+| where FileName == "wevtutil.exe"
+| where ProcessCommandLine has "cl"
+| project Timestamp, DeviceName, ProcessCommandLine
+| order by Timestamp desc
+```
+
+Step-by-step explanation:
+I started by using the DeviceProcessEvents table within the confirmed attack window using the same StartTime and EndTime.
+
+From there, I filtered on processes where the FileName was either cmdkey.exe or mstsc.exe, since both are commonly used during lateral movement prep (saving credentials and launching Remote Desktop sessions).
+
+I then used the extract function with a regex pattern to pull out any IP address from the ProcessCommandLine, treating that as the target system the attacker was trying to reach.
+
+Next, I projected the timestamp, device name, filename, full command line, and the extracted TargetIP so I could clearly see which hosts were being targeted.
+
+Finally, I filtered out any rows where TargetIP was empty and sorted everything in ascending time order to build a clean view of which remote systems the attacker was preparing to connect to and when.
+
+Screenshot: <img width="1895" height="360" alt="image" src="https://github.com/user-attachments/assets/1b1842cb-143a-43d0-9dfe-d2a2b54905f3" />
+
+
+---
+
+---
+### 🚩 Flag 20 – Anti-Forensics (Log Tampering)  
+Question: Identify the remote access tool used for lateral movement?
+**Answer**:** `mstsc.exe`  
+
+
+```kql
+DeviceProcessEvents
+| where Timestamp between (datetime(2025-11-19T00:00:00Z) .. datetime(2025-11-22T23:59:59Z))
+| where FileName == "wevtutil.exe"
+| where ProcessCommandLine has "cl"
+| project Timestamp, DeviceName, ProcessCommandLine
+| order by Timestamp desc
+```
+
+## ## Step-by-step explanation:
+I used the DeviceProcessEvents table and kept the same StartTime and EndTime window to stay within the confirmed attack timeframe.
+
+Using the DeviceProcessEvents table, I filtered specifically for the process wevtutil.exe, which is a built-in Windows tool used to manage event logs.
+
+Then I narrowed it down further to commands where the ProcessCommandLine contained "cl", which is typically used with wevtutil to clear event logs.
+
+Finally, I projected the timestamp, device name, and full process command line, and sorted the results in descending order, so I could quickly see the most recent attempts to clear or tamper with event logs, which lines up with defense evasion activity.
+
+Screenshot: <img width="1885" height="459" alt="image" src="https://github.com/user-attachments/assets/0d4b3453-a830-41f4-b347-133d029ab0df" />
+
+
+---
+
+Recommendations
 ---
 
 
-4. Indicators of Compromise (IOCs)
-Type	Value
-Attacker IP	88.97.178.12
-C2 IP	78.141.196.6
-Compromised Account	kenji.sato
-Persistence Account	support
-Malicious Script	wupdate.ps1
-Credential Tool	Mm.exe
-Staging Archive	exportdata.zip
-Exfil Service	discord.com
-Hidden Directory	C:\ProgramData\WindowsCache
-Excluded Path	C:\Users\KENJI~1.SAT\AppData\Local\Temp
-5. MITRE ATT&CK Summary
-Tactic	Technique ID	Technique Name
-Initial Access	T1133	External Remote Services (RDP)
-Execution	T1059.001	PowerShell
-Persistence	T1053.005	Scheduled Task
-Persistence	T1098	Account Manipulation
-Defense Evasion	T1112	Modify Registry
-Defense Evasion	T1562.001	Disable Security Tools
-Defense Evasion	T1096	Hidden Files and Directories
-Credential Access	T1003.001	OS Credential Dumping (LSASS)
-Discovery	T1018	Remote System Discovery
-Lateral Movement	T1021.001	Remote Desktop Protocol
-Collection	T1560	Archive Collected Data
-Exfiltration	T1567.002	Exfiltration to Cloud Storage Services
-Exfiltration	T1048	Exfiltration Over Encrypted Channel (HTTPS)
-Anti-Forensics	T1070.001	Clear Windows Event Logs
-6. Tools Used
 
-Microsoft Defender for Endpoint (MDE)
-
-Advanced Hunting (KQL)
-
-Windows Event Logs
-
-MITRE ATT&CK Navigator (conceptually)
 
 7. Lessons Learned
 
