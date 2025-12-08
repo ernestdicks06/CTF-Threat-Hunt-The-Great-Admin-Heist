@@ -119,7 +119,7 @@ Screenshot: <img width="1903" height="850" alt="image" src="https://github.com/u
 
 Question: What discovery command did the attacker use?
 
-**Answer**: `arp -a`
+**Answer**: `ARP.EXE -a`
 
 ```KQL
 /*
