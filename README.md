@@ -715,18 +715,36 @@ Screenshot: <img width="1885" height="459" alt="image" src="https://github.com/u
 
 ---
 
-Recommendations
+✅ Recommendations 
+
++ Tighten monitoring on admin accounts
+  
+Admin accounts should be closely watched at all times. Any time a user is added to the Administrators group, or when admin tools are used, it should trigger an alert so this activity can be reviewed immediately.
+
++ Turn on full PowerShell and command logging
+  
+PowerShell was a major part of this investigation. Enabling detailed PowerShell logging and keeping full command-line logs will make it much easier to catch malicious downloads, scripts, and hidden activity in the future.
+
++ Watch outbound web traffic more closely
+  
+Outbound HTTPS traffic to unfamiliar cloud services should be monitored more aggressively. Large file uploads or connections to unknown websites could be a sign of data exfiltration and should be investigated quickly.
+
++ Lock down remote access between systems
+  
+Remote Desktop access should only be allowed where it is clearly necessary. Internal systems should be segmented, and any unusual remote connections between devices should be reviewed to prevent lateral movement.
+
++ Turn hunt queries into real security alerts
+  
+The queries used in this threat hunt should be converted into real-time alerts inside the SIEM or EDR. This will allow future suspicious activity to be detected immediately instead of only during manual investigations.
+
 ---
 
+🧠 Final Thoughts
+
+This threat hunt showed how important it is to look beyond alerts and dig directly into endpoint and network activity. By following the evidence step-by-step, 
+I was able to piece together how administrative access, PowerShell activity, lateral movement, and outbound network traffic can all connect in a real 
+attack scenario. Even though this was a lab environment, the techniques used closely mirror what would be seen in a real enterprise investigation. 
+This project strengthened my ability to think like a defender, ask the right investigative questions, and validate suspicious behavior using data rather than 
+assumptions. Moving forward, the skills and detection logic built here can be directly applied to real-world SOC and incident response operations.
 
 
-
-7. Lessons Learned
-
-Exposed RDP without MFA is a high-risk entry point.
-
-Defender exclusions (paths/extensions) should be tightly controlled and monitored.
-
-Scheduled tasks, new local admins, and log clearing are high-signal events that should generate alerts.
-
-Cloud collaboration apps (Discord, etc.) can double as covert exfiltration channels.
