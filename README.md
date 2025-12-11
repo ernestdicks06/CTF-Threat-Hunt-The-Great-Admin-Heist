@@ -41,7 +41,7 @@ On **2025-11-19**, an attacker accessed **`AZUKI-SL`** via exposed RDP using the
 
 ---
 
-### 3. How I Solved Each Flag (Walkthrough + KQL)
+### 3. Key Observations
 
 ---
 
